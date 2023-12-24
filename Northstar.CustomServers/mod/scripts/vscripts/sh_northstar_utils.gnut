@@ -1,0 +1,36 @@
+globalize_all_functions
+
+// whether the server is a modded, northstar server
+bool function IsNorthstarServer()
+{
+	return GetConVarBool( "ns_is_modded_server" )
+}
+
+// whether the game should return to the lobby on GameRules_EndMatch()
+bool function ShouldReturnToLobby()
+{	
+	return GetConVarBool( "ns_should_return_to_lobby" )
+}
+
+// whether the game should send other clients back to lobby on GameRules_EndMatch()
+// basically for matchmaking
+bool function ShouldSendClientsBackToLobby()
+{	
+	return GetConVarBool( "ns_send_clients_back_to_lobby_after_match" )
+}
+
+// whether we should terminal the server( by sending command "quit" ) after a match ends
+// basically for matchmaking
+bool function ShouldQuitServerAfterMatch()
+{
+	// should never allow quiting the server if it's a listen server
+	#if SERVER
+		foreach ( entity player in GetPlayerArray() )
+		{
+			if ( NSIsPlayerLocalPlayer( player ) )
+				return false
+		}
+	#endif
+
+	return GetConVarBool( "ns_quit_server_after_match" )
+}
