@@ -995,8 +995,11 @@ string function FillInServerModsLabel( int server )
 	return ret
 }
 
-
 void function OnServerSelected( var button )
+{
+	thread OnServerSelected_Threaded( button )
+}
+void function OnServerSelected_Threaded( var button )
 {
 	if ( NSIsRequestingServerList() || NSGetServerCount() == 0 || file.serverListRequestFailed )
 		return
@@ -1004,33 +1007,108 @@ void function OnServerSelected( var button )
 	int serverIndex = file.focusedServerIndex
 
 	file.lastSelectedServer = serverIndex
+	bool shouldReload = false
+	// Count mods that have been successfully downloaded
+	bool autoDownloadAllowed = GetConVarBool( "allow_mod_auto_download" )
+	int downloadedMods = 0;
+
+	// Check out if there's any server-required mod that is not locally installed
+	array<string> modNames = NSGetModNames()
+	bool uninstalledModFound = false
 
 	// check mods
 	for ( int i = 0; i < NSGetServerRequiredModsCount( serverIndex ); i++ )
 	{
-		if ( !NSGetModNames().contains( NSGetServerRequiredModName( serverIndex, i ) ) )
+		string modname = NSGetServerRequiredModName( serverIndex, i )
+		string modversion = NSGetServerRequiredModVersion( serverIndex, i )
+		if ( modname.len() > 10 && modname.slice(0, 10) == "Northstar." )
+			continue
+		if ( !modNames.contains( modname ) )
 		{
-			DialogData dialogData
-			dialogData.header = "#ERROR"
-			dialogData.message = "Missing mod \"" + NSGetServerRequiredModName( serverIndex, i ) + "\" v" + NSGetServerRequiredModVersion( serverIndex, i )
-			dialogData.image = $"ui/menu/common/dialog_error"
+			print( format ( "\"%s\" was not found locally, triggering manifesto fetching.", modname ) )
+			uninstalledModFound = true
+			break
+		} else if ( NSGetModVersionByModName( modname ) != modversion ) {
+			print( format ( "\"%s\" was found locally but has version \"%s\" while server requires \"%s\", triggering manifesto fetching.", modname, NSGetModVersionByModName( modname ), modversion ) )
+			uninstalledModFound = true
+			break
+		}
+	}
+	if ( uninstalledModFound && autoDownloadAllowed )
+	{
+		print("Auto-download is allowed, checking if missing mods can be installed automatically.")
+		FetchVerifiedModsManifesto()
+	}
 
-			#if PC_PROG
+
+	for ( int i = 0; i < NSGetServerRequiredModsCount( serverIndex ); i++ )
+	{
+		string modname = NSGetServerRequiredModName( serverIndex, i )
+		string modversion = NSGetServerRequiredModVersion( serverIndex, i )
+		// Tolerate core mods having different versions
+		if ( modname.len() > 10 && modname.slice(0, 10) == "Northstar." )
+			continue
+
+		if ( !NSGetModNames().contains( modname ) || NSGetModVersionByModName( modname ) != modversion )
+		{
+			// Auto-download mod
+			if ( autoDownloadAllowed )
+			{
+				bool modIsVerified = NSIsModDownloadable( modname, modversion )
+
+				// Display error message if mod is not verified
+				if ( !modIsVerified )
+				{
+					DialogData dialogData
+					dialogData.header = "#ERROR"
+					dialogData.message = Localize( "#MISSING_MOD", modname, modversion )
+					dialogData.message += "\n" + Localize( "#MOD_NOT_VERIFIED" )
+					dialogData.image = $"ui/menu/common/dialog_error"
+
+					AddDialogButton( dialogData, "#DISMISS" )
+					AddDialogFooter( dialogData, "#A_BUTTON_SELECT" )
+					AddDialogFooter( dialogData, "#B_BUTTON_DISMISS_RUI" )
+
+					OpenDialog( dialogData )
+					return
+				}
+				else
+				{
+					if ( DownloadMod( modname, modversion ) )
+					{
+						downloadedMods++
+					}
+					else
+					{
+						DisplayModDownloadErrorDialog( modname )
+						return
+					}
+				}
+			}
+
+			// Mod not found, display error message
+			else
+			{
+				DialogData dialogData
+				dialogData.header = "#ERROR"
+				dialogData.message = Localize( "#MISSING_MOD", modname, modversion )
+				dialogData.image = $"ui/menu/common/dialog_error"
+
 				AddDialogButton( dialogData, "#DISMISS" )
-
 				AddDialogFooter( dialogData, "#A_BUTTON_SELECT" )
-			#endif // PC_PROG
-			AddDialogFooter( dialogData, "#B_BUTTON_DISMISS_RUI" )
+				AddDialogFooter( dialogData, "#B_BUTTON_DISMISS_RUI" )
 
-			OpenDialog( dialogData )
+				OpenDialog( dialogData )
+				return
+			}
 
-			return
+
 		}
 		else
 		{
 			// this uses semver https://semver.org
-			array<string> serverModVersion = split( NSGetServerRequiredModVersion( serverIndex, i ), "." )
-			array<string> clientModVersion = split( NSGetModVersionByModName( NSGetServerRequiredModName( serverIndex, i ) ), "." )
+			array<string> serverModVersion = split( modname, "." )
+			array<string> clientModVersion = split( NSGetModVersionByModName( modname ), "." )
 
 			bool semverFail = false
 			// if server has invalid semver don't bother checking
@@ -1071,11 +1149,11 @@ void function OnServerSelected( var button )
 		AdvanceMenu( GetMenu( "ConnectWithPasswordMenu" ) )
 	}
 	else
-		thread ThreadedAuthAndConnectToServer()
+		thread ThreadedAuthAndConnectToServer("", downloadedMods != 0)
 }
 
 
-void function ThreadedAuthAndConnectToServer( string password = "" )
+void function ThreadedAuthAndConnectToServer( string password = "", bool modsChanged = false)
 {
 	if ( NSIsAuthenticatingWithServer() )
 		return
@@ -1102,18 +1180,7 @@ void function ThreadedAuthAndConnectToServer( string password = "" )
 	}
 
 	file.cancelConnection = false
-	NSSetLoading( true )
-	NSUpdateServerInfo(
-		NSGetServerID( file.lastSelectedServer ),
-		NSGetServerName( file.lastSelectedServer ),
-		password,
-		NSGetServerPlayerCount( file.lastSelectedServer ),
-		NSGetServerMaxPlayerCount( file.lastSelectedServer ),
-		NSGetServerMap( file.lastSelectedServer ),
-		Localize( GetMapDisplayName( NSGetServerMap( file.lastSelectedServer ) ) ),
-		NSGetServerPlaylist( file.lastSelectedServer ),
-		Localize( GetPlaylistDisplayName( NSGetServerPlaylist( file.lastSelectedServer ) ) )
-	)
+
 
 	if ( NSWasAuthSuccessful() )
 	{
