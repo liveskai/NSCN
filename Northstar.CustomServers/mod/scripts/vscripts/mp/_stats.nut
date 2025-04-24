@@ -220,7 +220,7 @@ void function Stats_OnPlayerDidDamage( entity victim, var damageInfo )
 			attacker = GetPetTitanOwner( attacker )
 	}
 
-	if ( !attacker.IsPlayer() )
+	if ( !IsValidPlayer(attacker) )
 		return
 
 	string weaponName = GetPersistenceRefFromDamageInfo( damageInfo )
